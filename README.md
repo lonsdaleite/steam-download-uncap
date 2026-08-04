@@ -3,6 +3,62 @@
 Removes the receive-window ceiling on Steam downloads — LAN transfers between
 two machines, and CDN downloads over a fast internet link alike.
 
+If Steam downloads or LAN transfers sit well below what the rest of your network
+does, install this and restart Steam.
+
+## Install
+
+Tested on SteamOS only. See [Other distributions](#other-distributions) before
+installing elsewhere.
+
+On a Steam Deck this happens in Desktop Mode: hold the power button, choose
+*Switch to Desktop*. Open a terminal — the *Konsole* icon in the taskbar — and
+run:
+
+    cd ~
+    git clone https://github.com/lonsdaleite/steam-download-uncap
+    cd ~/steam-download-uncap
+    ./install.sh
+    systemctl --user restart steam-launcher.service
+
+The first run builds the library in a container and takes a minute or two.
+No sudo, no writes outside `$HOME`, nothing in the read-only rootfs.
+`install.sh` calls `build.sh` when `build/` is empty.
+
+Steam restarts on the last command; a reboot or a round trip through Game Mode
+does the same thing.
+
+Start a download and watch the speed. To confirm the shim is loaded rather than
+guessing from the number:
+
+    grep -c norcvbuf /proc/$(pgrep -x steam | head -1)/maps
+
+Anything above `0` means it is in. A `0` means Steam was not restarted, or is
+not started by `steam-launcher.service`.
+
+## Uninstall
+
+    cd ~/steam-download-uncap
+    ./uninstall.sh
+    systemctl --user restart steam-launcher.service
+
+## Other distributions
+
+Two things this depends on are SteamOS-specific, so Bazzite, CachyOS, Arch and
+the rest may need adjusting:
+
+- The `LD_PRELOAD` is delivered through a drop-in for the `steam-launcher.service`
+  user unit. Where Steam is started from a desktop entry instead, the drop-in
+  attaches to nothing and the shim never loads. Check with
+  `systemctl --user list-unit-files 'steam*'`.
+- `build.sh` needs `podman`, because SteamOS ships no compiler. With `gcc` and
+  32-bit headers present, build `src/norcvbuf.c` directly — see the two `gcc`
+  lines in `build.sh`.
+
+Reports from other distributions are welcome.
+
+## Why
+
 The Steam client calls `setsockopt(SO_RCVBUF)` with 128 KiB on its download
 sockets. An explicit `SO_RCVBUF` switches off Linux receive-buffer autotuning
 and pins the window scale factor negotiated in the SYN, so the advertised
@@ -35,26 +91,8 @@ because it never sets `SO_RCVBUF`.
 | `rcv_wnd` | 171536 | 22671360 |
 | `rcv_wscale` | 2 | 10 |
 
-## Install
-
-    ./install.sh
-    systemctl --user restart steam-launcher.service
-
-No sudo, no writes outside `$HOME`, nothing in the read-only rootfs.
-`install.sh` calls `build.sh` when `build/` is empty.
-
-Verify after restarting Steam and starting a download:
-
-    PID=$(pgrep -x steam | head -1)
-    grep norcvbuf /proc/$PID/maps
-    ss -tinm state established dst <peer-ip>
-
-`rb` should read tens of megabytes instead of `rb262144`.
-
-## Uninstall
-
-    ./uninstall.sh
-    systemctl --user restart steam-launcher.service
+Socket figures come from `ss -tinm state established dst <peer>`, with `<peer>`
+the other machine on a LAN transfer or the CDN host on a download.
 
 ## Layout
 
