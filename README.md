@@ -1,7 +1,8 @@
 # steam-download-uncap
 
-Removes the receive-window ceiling on Steam downloads — LAN transfers between
-two machines, and CDN downloads over a fast internet link alike.
+Removes the socket-buffer ceilings on Steam transfers — receiving and sending
+LAN transfers between two machines, and CDN downloads over a fast internet link
+alike.
 
 If Steam downloads or LAN transfers sit well below what the rest of your network
 does, install this and restart Steam.
@@ -73,8 +74,15 @@ Bandwidth does not appear in that formula. A 128 KiB window sustains roughly
 underneath is. This is why the ceiling shows up first on Wi-Fi and on distant
 CDNs: both raise RTT, while a short wired hop hides the problem.
 
-This shim interposes `setsockopt` and drops `SO_RCVBUF`, reporting success.
-Steam believes it configured the socket; the kernel keeps autotuning it.
+The sending side of a LAN transfer has the same problem with the other buffer:
+the client sets `SO_SNDBUF` so small that the kernel clamps it to its minimum of
+4608 bytes. The socket drains faster than Steam can refill a buffer that size,
+so the connection spends its time application-limited with a fraction of the
+congestion window in flight.
+
+This shim interposes `setsockopt` and drops `SO_RCVBUF` and `SO_SNDBUF`,
+reporting success. Steam believes it configured the socket; the kernel keeps
+autotuning it.
 
 ## Measured
 
@@ -91,12 +99,22 @@ because it never sets `SO_RCVBUF`.
 | `rcv_wnd` | 171536 | 22671360 |
 | `rcv_wscale` | 2 | 10 |
 
+The same handheld sending a LAN transfer to a PC over Wi-Fi 6, before and
+after `SO_SNDBUF` was added to the shim. The before figure is
+application-limited; the after figure is bound by the air link, with RTT
+growing from about 1.3 ms to 12–19 ms as the queue fills.
+
+| | before | after |
+| --- | --- | --- |
+| throughput | 31 MB/s | 70 MB/s |
+| `tb` | 4608 | 4194304 |
+
 Socket figures come from `ss -tinm state established dst <peer>`, with `<peer>`
 the other machine on a LAN transfer or the CDN host on a download.
 
 ## Layout
 
-    src/norcvbuf.c   the interposer, named after the option it swallows
+    src/norcvbuf.c   the interposer, named after the option it first swallowed
     build.sh         builds both ELF classes in a throwaway podman container
     install.sh       installs the libraries and the systemd user drop-in
     uninstall.sh     reverses install.sh
@@ -116,7 +134,7 @@ sets the variable from outside Steam's reach and needs no root. Living in
 ## Side effects
 
 `LD_PRELOAD` is inherited by every Steam child process, games included, so no
-process under Steam can size its own receive buffer any more — the kernel
+process under Steam can size its own receive or send buffer any more — the kernel
 decides instead. That is the normal path for most software, but it is the first
 thing to revert if network behaviour anywhere under Steam looks strange.
 
